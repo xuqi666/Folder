@@ -1,93 +1,57 @@
 WITH RECURSIVE column_relations AS (
-    -- 初始查询：获取给定表名对应表的所有列（非递归部分）
+    -- 起点：获取给定表名对应表的所有列，作为初始源列
     SELECT 
-        t.id AS source_table_id,
+        c.id AS source_column_id,
         l.name AS source_layer,
         t.name AS source_table_name,
         c.name AS source_column_name,
-        c.id AS source_column_id,  -- 源列ID
-        CAST(NULL AS int) AS target_column_id,  -- 目标列ID初始为空
-        CAST(NULL AS varchar) AS target_table_name,  -- 目标表名初始为空
-        CAST(NULL AS varchar) AS target_layer,  -- 目标层初始为空
-        CAST(NULL AS varchar) AS target_column_name,  -- 目标列名初始为空
-        'START' AS relation_direction
+        NULL::int AS target_column_id,  -- 初始时没有目标列
+        NULL::varchar AS target_table_name,
+        NULL::varchar AS target_layer,
+        NULL::varchar AS target_column_name,
+        0 AS depth  -- 初始层级为0
     FROM 
         meta_entity_table t
     JOIN 
-        meta_entity_layer l ON t.layer_id = l.id  -- 关联层信息
-    JOIN 
         meta_entity_table_column c ON t.id = c.table_id
+    JOIN 
+        meta_entity_layer l ON t.layer_id = l.id
     WHERE 
-        t.name = 'my_table'  -- 输入的表名
-    
+        t.name = 'my_table'  -- 输入表名作为起点
+
     UNION ALL
 
-    -- 递归查询：向下递归查找下游列
+    -- 递归：向下查找下游列
     SELECT 
-        t_source.id AS source_table_id,
+        c_source.id AS source_column_id,
         l_source.name AS source_layer,
         t_source.name AS source_table_name,
         c_source.name AS source_column_name,
-        c_source.id AS source_column_id,  -- 源列ID
-        c_target.id AS target_column_id,  -- 递归时的目标列ID
-        t_target.name AS target_table_name,  -- 递归时的目标表
-        l_target.name AS target_layer,  -- 目标表所在的层
-        c_target.name AS target_column_name,  -- 目标列名
-        'DOWNSTREAM' AS relation_direction
+        c_target.id AS target_column_id,
+        t_target.name AS target_table_name,
+        l_target.name AS target_layer,
+        c_target.name AS target_column_name,
+        cr.depth + 1 AS depth  -- 递归深度加1
     FROM 
-        meta_entity_transition tr
+        column_relations cr  -- 递归引用
     JOIN 
-        meta_entity_table_column c_source ON tr.source_id = c_source.id  -- 源列
+        meta_entity_transition tr ON cr.source_column_id = tr.source_id  -- 通过源列ID递归
     JOIN 
-        meta_entity_table t_source ON c_source.table_id = t_source.id  -- 源表
+        meta_entity_table_column c_source ON tr.source_id = c_source.id  -- 递归中的源列
     JOIN 
-        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 源表的层
+        meta_entity_table t_source ON c_source.table_id = t_source.id  -- 递归中的源表
+    JOIN 
+        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 递归中的源表的层
 
     JOIN 
-        meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 目标列
+        meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 递归中的目标列
     JOIN 
         meta_entity_table t_target ON c_target.table_id = t_target.id  -- 目标表
     JOIN 
         meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表的层
-
-    JOIN 
-        column_relations cr ON cr.source_column_id = tr.source_id  -- 递归部分：递归查找目标列
-    
-    UNION ALL
-
-    -- 递归查询：向上递归查找上游列
-    SELECT 
-        t_target.id AS source_table_id,
-        l_target.name AS source_layer,
-        t_target.name AS source_table_name,
-        c_target.name AS source_column_name,
-        c_target.id AS source_column_id,  -- 源列ID
-        c_source.id AS target_column_id,  -- 递归时的目标列ID
-        t_source.name AS target_table_name,  -- 递归时的目标表
-        l_source.name AS target_layer,  -- 目标表所在的层
-        c_source.name AS target_column_name,  -- 目标列名
-        'UPSTREAM' AS relation_direction
-    FROM 
-        meta_entity_transition tr
-    JOIN 
-        meta_entity_table_column c_source ON tr.source_id = c_source.id  -- 源列
-    JOIN 
-        meta_entity_table t_source ON c_source.table_id = t_source.id  -- 源表
-    JOIN 
-        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 源表的层
-
-    JOIN 
-        meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 目标列
-    JOIN 
-        meta_entity_table t_target ON c_target.table_id = t_target.id  -- 目标表
-    JOIN 
-        meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表的层
-
-    JOIN 
-        column_relations cr ON cr.source_column_id = tr.target_id  -- 递归部分：递归查找源列
 )
 
--- 最终查询结果，排除起点
+-- 最终查询结果
 SELECT DISTINCT 
     cr.source_layer,
     cr.source_table_name,
@@ -98,4 +62,6 @@ SELECT DISTINCT
 FROM 
     column_relations cr
 WHERE 
-    cr.relation_direction != 'START';
+    cr.target_column_id IS NOT NULL  -- 排除没有目标的记录
+ORDER BY 
+    cr.depth;
