@@ -1,13 +1,15 @@
 WITH RECURSIVE column_relations AS (
-    -- 起点：获取给定表名对应表的所有列（源列）
+    -- 初始查询：获取给定表名对应表的所有列（非递归部分）
     SELECT 
         t.id AS source_table_id,
         l.name AS source_layer,
         t.name AS source_table_name,
         c.name AS source_column_name,
-        NULL::int AS target_column_id,
-        NULL::varchar AS target_table_name,
-        NULL::varchar AS target_layer,
+        c.id AS source_column_id,  -- 源列ID
+        CAST(NULL AS int) AS target_column_id,  -- 目标列ID初始为空
+        CAST(NULL AS varchar) AS target_table_name,  -- 目标表名初始为空
+        CAST(NULL AS varchar) AS target_layer,  -- 目标层初始为空
+        CAST(NULL AS varchar) AS target_column_name,  -- 目标列名初始为空
         'START' AS relation_direction
     FROM 
         meta_entity_table t
@@ -17,18 +19,20 @@ WITH RECURSIVE column_relations AS (
         meta_entity_table_column c ON t.id = c.table_id
     WHERE 
         t.name = 'my_table'  -- 输入的表名
-
+    
     UNION ALL
 
-    -- 向下递归查找下游列
+    -- 递归查询：向下递归查找下游列
     SELECT 
         t_source.id AS source_table_id,
         l_source.name AS source_layer,
         t_source.name AS source_table_name,
         c_source.name AS source_column_name,
-        c_target.id AS target_column_id,
-        t_target.name AS target_table_name,
-        l_target.name AS target_layer,
+        c_source.id AS source_column_id,  -- 源列ID
+        c_target.id AS target_column_id,  -- 递归时的目标列ID
+        t_target.name AS target_table_name,  -- 递归时的目标表
+        l_target.name AS target_layer,  -- 目标表所在的层
+        c_target.name AS target_column_name,  -- 目标列名
         'DOWNSTREAM' AS relation_direction
     FROM 
         meta_entity_transition tr
@@ -37,29 +41,31 @@ WITH RECURSIVE column_relations AS (
     JOIN 
         meta_entity_table t_source ON c_source.table_id = t_source.id  -- 源表
     JOIN 
-        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 源表对应的层
+        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 源表的层
 
     JOIN 
         meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 目标列
     JOIN 
         meta_entity_table t_target ON c_target.table_id = t_target.id  -- 目标表
     JOIN 
-        meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表对应的层
+        meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表的层
 
     JOIN 
-        column_relations cr ON tr.source_id = cr.target_column_id  -- 递归查找
-
+        column_relations cr ON cr.source_column_id = tr.source_id  -- 递归部分：递归查找目标列
+    
     UNION ALL
 
-    -- 向上递归查找上游列
+    -- 递归查询：向上递归查找上游列
     SELECT 
         t_target.id AS source_table_id,
         l_target.name AS source_layer,
         t_target.name AS source_table_name,
         c_target.name AS source_column_name,
-        c_source.id AS target_column_id,
-        t_source.name AS target_table_name,
-        l_source.name AS target_layer,
+        c_target.id AS source_column_id,  -- 源列ID
+        c_source.id AS target_column_id,  -- 递归时的目标列ID
+        t_source.name AS target_table_name,  -- 递归时的目标表
+        l_source.name AS target_layer,  -- 目标表所在的层
+        c_source.name AS target_column_name,  -- 目标列名
         'UPSTREAM' AS relation_direction
     FROM 
         meta_entity_transition tr
@@ -68,17 +74,17 @@ WITH RECURSIVE column_relations AS (
     JOIN 
         meta_entity_table t_source ON c_source.table_id = t_source.id  -- 源表
     JOIN 
-        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 源表对应的层
+        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 源表的层
 
     JOIN 
         meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 目标列
     JOIN 
         meta_entity_table t_target ON c_target.table_id = t_target.id  -- 目标表
     JOIN 
-        meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表对应的层
+        meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表的层
 
     JOIN 
-        column_relations cr ON tr.target_id = cr.source_table_id -- 递归查找
+        column_relations cr ON cr.source_column_id = tr.target_id  -- 递归部分：递归查找源列
 )
 
 -- 最终查询结果，排除起点
