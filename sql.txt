@@ -1,5 +1,5 @@
-WITH RECURSIVE column_relations AS (
-    -- 起点：获取给定表名对应表的所有列，作为初始源列
+！WITH RECURSIVE column_relations AS (
+    -- 初始查询：获取给定表名的所有列，作为递归起点
     SELECT 
         c.id AS source_column_id,
         l.name AS source_layer,
@@ -9,19 +9,19 @@ WITH RECURSIVE column_relations AS (
         NULL::varchar AS target_table_name,
         NULL::varchar AS target_layer,
         NULL::varchar AS target_column_name,
-        0 AS depth  -- 初始层级为0
+        0 AS depth  -- 递归深度
     FROM 
         meta_entity_table t
     JOIN 
-        meta_entity_table_column c ON t.id = c.table_id
-    JOIN 
         meta_entity_layer l ON t.layer_id = l.id
+    JOIN 
+        meta_entity_table_column c ON t.id = c.table_id
     WHERE 
-        t.name = 'my_table'  -- 输入表名作为起点
+        t.name = 'your_table_name'  -- 替换为实际的表名
 
     UNION ALL
 
-    -- 递归：向下查找下游列
+    -- 递归：查找下游列
     SELECT 
         c_source.id AS source_column_id,
         l_source.name AS source_layer,
@@ -31,27 +31,27 @@ WITH RECURSIVE column_relations AS (
         t_target.name AS target_table_name,
         l_target.name AS target_layer,
         c_target.name AS target_column_name,
-        cr.depth + 1 AS depth  -- 递归深度加1
+        cr.depth + 1 AS depth
     FROM 
-        column_relations cr  -- 递归引用
+        column_relations cr  -- 递归部分
     JOIN 
-        meta_entity_transition tr ON cr.source_column_id = tr.source_id  -- 通过源列ID递归
+        meta_entity_transition tr ON cr.source_column_id = tr.source_id  -- 匹配源列
     JOIN 
-        meta_entity_table_column c_source ON tr.source_id = c_source.id  -- 递归中的源列
+        meta_entity_table_column c_source ON tr.source_id = c_source.id
     JOIN 
-        meta_entity_table t_source ON c_source.table_id = t_source.id  -- 递归中的源表
+        meta_entity_table t_source ON c_source.table_id = t_source.id
     JOIN 
-        meta_entity_layer l_source ON t_source.layer_id = l_source.id  -- 递归中的源表的层
+        meta_entity_layer l_source ON t_source.layer_id = l_source.id
 
     JOIN 
-        meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 递归中的目标列
+        meta_entity_table_column c_target ON tr.target_id = c_target.id  -- 匹配目标列
     JOIN 
-        meta_entity_table t_target ON c_target.table_id = t_target.id  -- 目标表
+        meta_entity_table t_target ON c_target.table_id = t_target.id
     JOIN 
-        meta_entity_layer l_target ON t_target.layer_id = l_target.id  -- 目标表的层
+        meta_entity_layer l_target ON t_target.layer_id = l_target.id
 )
 
--- 最终查询结果
+-- 最终结果，排除起点
 SELECT DISTINCT 
     cr.source_layer,
     cr.source_table_name,
@@ -62,6 +62,6 @@ SELECT DISTINCT
 FROM 
     column_relations cr
 WHERE 
-    cr.target_column_id IS NOT NULL  -- 排除没有目标的记录
+    cr.target_column_id IS NOT NULL  -- 排除没有目标列的记录
 ORDER BY 
     cr.depth;
