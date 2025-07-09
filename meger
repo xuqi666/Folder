@@ -3,67 +3,66 @@ import com.fasterxml.jackson.databind.node.*;
 
 import java.util.*;
 
-public class JsonRoleMerger {
+public class JsonRoleMergerTwoOnly {
 
     private static final ObjectMapper mapper = new ObjectMapper();
 
     /**
-     * 合并多个 JSON 字符串，按 a.xx 数组中的 role 合并 members
+     * 合并两个 JSON 字符串，按 a.sa1 / sa2 下的 role 合并 members
      */
-    public static ObjectNode mergeJsonByRole(String... jsonStrings) throws Exception {
-        // roleMap: aKey -> (role -> Set<member>)
-        Map<String, Map<String, Set<String>>> allRoleMap = new LinkedHashMap<>();
+    public static ObjectNode mergeTwoJsonByRole(String json1, String json2) throws Exception {
+        JsonNode root1 = mapper.readTree(json1);
+        JsonNode root2 = mapper.readTree(json2);
 
-        for (String json : jsonStrings) {
-            JsonNode root = mapper.readTree(json);
-            JsonNode aNode = root.path("a");
-            if (!aNode.isObject()) continue;
-
-            Iterator<String> saKeys = aNode.fieldNames();
-            while (saKeys.hasNext()) {
-                String saKey = saKeys.next(); // like "sa1", "sa2"
-                JsonNode saArray = aNode.get(saKey);
-                if (!saArray.isArray()) continue;
-
-                Map<String, Set<String>> roleMap = allRoleMap.computeIfAbsent(saKey, k -> new LinkedHashMap<>());
-                mergeRoleMembers(saArray, roleMap);
-            }
-        }
-
-        // 构建结果 JSON
         ObjectNode result = mapper.createObjectNode();
-        ObjectNode aNode = mapper.createObjectNode();
+        ObjectNode resultA = mapper.createObjectNode();
 
-        for (Map.Entry<String, Map<String, Set<String>>> saEntry : allRoleMap.entrySet()) {
-            String saKey = saEntry.getKey();
-            Map<String, Set<String>> roleMap = saEntry.getValue();
+        // 找到 a 下的每个 key，例如 sa1、sa2
+        Set<String> allKeys = new LinkedHashSet<>();
+        JsonNode a1 = root1.path("a");
+        JsonNode a2 = root2.path("a");
 
+        a1.fieldNames().forEachRemaining(allKeys::add);
+        a2.fieldNames().forEachRemaining(allKeys::add);
+
+        for (String saKey : allKeys) {
+            JsonNode arr1 = a1.path(saKey);
+            JsonNode arr2 = a2.path(saKey);
+
+            Map<String, Set<String>> roleMap = new LinkedHashMap<>();
+            mergeRoleMembers(arr1, roleMap);
+            mergeRoleMembers(arr2, roleMap);
+
+            // 构造数组
             ArrayNode mergedArray = mapper.createArrayNode();
-            for (Map.Entry<String, Set<String>> roleEntry : roleMap.entrySet()) {
+            for (Map.Entry<String, Set<String>> entry : roleMap.entrySet()) {
                 ObjectNode roleObj = mapper.createObjectNode();
-                roleObj.put("role", roleEntry.getKey());
+                roleObj.put("role", entry.getKey());
 
                 ArrayNode membersArray = mapper.createArrayNode();
-                roleEntry.getValue().forEach(membersArray::add);
+                entry.getValue().forEach(membersArray::add);
                 roleObj.set("members", membersArray);
 
                 mergedArray.add(roleObj);
             }
 
-            aNode.set(saKey, mergedArray);
+            resultA.set(saKey, mergedArray);
         }
 
-        result.set("a", aNode);
+        result.set("a", resultA);
         return result;
     }
 
-    private static void mergeRoleMembers(JsonNode saArray, Map<String, Set<String>> roleMap) {
-        for (JsonNode item : saArray) {
-            String role = item.path("role").asText();
-            JsonNode membersNode = item.path("members");
+    private static void mergeRoleMembers(JsonNode arr, Map<String, Set<String>> roleMap) {
+        if (!arr.isArray()) return;
+
+        for (JsonNode obj : arr) {
+            String role = obj.path("role").asText();
+            JsonNode members = obj.path("members");
+            if (!members.isArray()) continue;
 
             roleMap.computeIfAbsent(role, k -> new LinkedHashSet<>());
-            for (JsonNode member : membersNode) {
+            for (JsonNode member : members) {
                 roleMap.get(role).add(member.asText());
             }
         }
