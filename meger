@@ -1,70 +1,107 @@
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.node.*;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.auth.oauth2.GoogleCredentials;
+import com.google.auth.oauth2.ServiceAccountCredentials;
+import com.google.api.client.http.*;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import org.apache.commons.codec.digest.DigestUtils;
 
+import javax.net.ssl.*;
+import java.io.*;
+import java.nio.file.*;
+import java.security.KeyStore;
+import java.security.SecureRandom;
+import java.security.cert.*;
 import java.util.*;
 
-public class JsonRoleMergerTwoOnly {
+public class GkeNamespaceFetcher {
 
-    private static final ObjectMapper mapper = new ObjectMapper();
+    // 集群模型
+    static class GkeCluster {
+        String name;
+        String endpoint;
+        String caBase64;
 
-    /**
-     * 合并两个 JSON 字符串，按 a.sa1 / sa2 下的 role 合并 members
-     */
-    public static ObjectNode mergeTwoJsonByRole(String json1, String json2) throws Exception {
-        JsonNode root1 = mapper.readTree(json1);
-        JsonNode root2 = mapper.readTree(json2);
-
-        ObjectNode result = mapper.createObjectNode();
-        ObjectNode resultA = mapper.createObjectNode();
-
-        // 找到 a 下的每个 key，例如 sa1、sa2
-        Set<String> allKeys = new LinkedHashSet<>();
-        JsonNode a1 = root1.path("a");
-        JsonNode a2 = root2.path("a");
-
-        a1.fieldNames().forEachRemaining(allKeys::add);
-        a2.fieldNames().forEachRemaining(allKeys::add);
-
-        for (String saKey : allKeys) {
-            JsonNode arr1 = a1.path(saKey);
-            JsonNode arr2 = a2.path(saKey);
-
-            Map<String, Set<String>> roleMap = new LinkedHashMap<>();
-            mergeRoleMembers(arr1, roleMap);
-            mergeRoleMembers(arr2, roleMap);
-
-            // 构造数组
-            ArrayNode mergedArray = mapper.createArrayNode();
-            for (Map.Entry<String, Set<String>> entry : roleMap.entrySet()) {
-                ObjectNode roleObj = mapper.createObjectNode();
-                roleObj.put("role", entry.getKey());
-
-                ArrayNode membersArray = mapper.createArrayNode();
-                entry.getValue().forEach(membersArray::add);
-                roleObj.set("members", membersArray);
-
-                mergedArray.add(roleObj);
-            }
-
-            resultA.set(saKey, mergedArray);
+        public GkeCluster(String name, String endpoint, String caBase64) {
+            this.name = name;
+            this.endpoint = endpoint;
+            this.caBase64 = caBase64;
         }
-
-        result.set("a", resultA);
-        return result;
     }
 
-    private static void mergeRoleMembers(JsonNode arr, Map<String, Set<String>> roleMap) {
-        if (!arr.isArray()) return;
+    public static void main(String[] args) throws Exception {
+        String credentialsPath = "path/to/your-service-account.json";
 
-        for (JsonNode obj : arr) {
-            String role = obj.path("role").asText();
-            JsonNode members = obj.path("members");
-            if (!members.isArray()) continue;
+        // 示例：三个集群，两个 endpoint 一样但 CA 不同
+        List<GkeCluster> clusters = Arrays.asList(
+            new GkeCluster("cluster-a", "https://172.16.0.2", "BASE64_CA_1"),
+            new GkeCluster("cluster-b", "https://172.16.0.2", "BASE64_CA_2"),
+            new GkeCluster("cluster-c", "https://172.16.0.9", "BASE64_CA_3")
+        );
 
-            roleMap.computeIfAbsent(role, k -> new LinkedHashSet<>());
-            for (JsonNode member : members) {
-                roleMap.get(role).add(member.asText());
+        String token = getAccessToken(credentialsPath);
+        for (GkeCluster cluster : clusters) {
+            System.out.println("🔍 集群: " + cluster.name);
+            try {
+                List<String> ns = fetchNamespaces(cluster.endpoint, cluster.caBase64, token);
+                ns.forEach(n -> System.out.println("  - " + n));
+            } catch (Exception e) {
+                System.err.println("⚠️  无法访问 " + cluster.name + ": " + e.getMessage());
             }
         }
+    }
+
+    public static String getAccessToken(String saKeyPath) throws IOException {
+        GoogleCredentials credentials = ServiceAccountCredentials.fromStream(new FileInputStream(saKeyPath))
+                .createScoped("https://www.googleapis.com/auth/cloud-platform");
+        credentials.refreshIfExpired();
+        return credentials.getAccessToken().getTokenValue();
+    }
+
+    public static List<String> fetchNamespaces(String endpoint, String caBase64, String token) throws Exception {
+        // 构建信任上下文（基于集群自己的 CA）
+        SSLContext sslContext = createSSLContext(caBase64);
+        HttpTransport transport = new NetHttpTransport.Builder()
+                .doNotValidateCertificate()  // 可选：你若配置 SSLContext，CA 验证也行
+                .trustCertificatesFromJavaKeystore(null) // 用我们自己的
+                .setSslSocketFactory(sslContext.getSocketFactory())
+                .build();
+
+        GenericUrl url = new GenericUrl(endpoint + "/api/v1/namespaces");
+        HttpRequestFactory requestFactory = transport.createRequestFactory(
+                request -> request.getHeaders().setAuthorization("Bearer " + token));
+
+        HttpRequest request = requestFactory.buildGetRequest(url);
+        HttpResponse response = request.execute();
+        String responseBody = response.parseAsString();
+
+        // 提取 namespace 名称
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(responseBody);
+        List<String> namespaces = new ArrayList<>();
+        for (JsonNode item : root.path("items")) {
+            namespaces.add(item.path("metadata").path("name").asText());
+        }
+        return namespaces;
+    }
+
+    public static SSLContext createSSLContext(String caBase64) throws Exception {
+        byte[] decoded = Base64.getDecoder().decode(caBase64);
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        Certificate caCert;
+        try (InputStream in = new ByteArrayInputStream(decoded)) {
+            caCert = cf.generateCertificate(in);
+        }
+
+        KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
+        ks.load(null, null);
+        ks.setCertificateEntry("ca", caCert);
+
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(ks);
+
+        SSLContext ctx = SSLContext.getInstance("TLS");
+        ctx.init(null, tmf.getTrustManagers(), new SecureRandom());
+        return ctx;
     }
 }
