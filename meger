@@ -1,107 +1,72 @@
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
-import com.google.api.client.http.*;
-import com.google.api.client.http.javanet.NetHttpTransport;
-import org.apache.commons.codec.digest.DigestUtils;
-
-import javax.net.ssl.*;
-import java.io.*;
-import java.nio.file.*;
-import java.security.KeyStore;
-import java.security.SecureRandom;
-import java.security.cert.*;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.*;
 
-public class GkeNamespaceFetcher {
+public class GKEProjectNamespaceFetcher {
 
-    // 集群模型
-    static class GkeCluster {
-        String name;
-        String endpoint;
-        String caBase64;
+    public static void main(String[] args) {
+        // 你可以根据需要添加多个项目 ID
+        List<String> projectIds = Arrays.asList("project-1-id", "project-2-id");
 
-        public GkeCluster(String name, String endpoint, String caBase64) {
-            this.name = name;
-            this.endpoint = endpoint;
-            this.caBase64 = caBase64;
-        }
-    }
-
-    public static void main(String[] args) throws Exception {
-        String credentialsPath = "path/to/your-service-account.json";
-
-        // 示例：三个集群，两个 endpoint 一样但 CA 不同
-        List<GkeCluster> clusters = Arrays.asList(
-            new GkeCluster("cluster-a", "https://172.16.0.2", "BASE64_CA_1"),
-            new GkeCluster("cluster-b", "https://172.16.0.2", "BASE64_CA_2"),
-            new GkeCluster("cluster-c", "https://172.16.0.9", "BASE64_CA_3")
-        );
-
-        String token = getAccessToken(credentialsPath);
-        for (GkeCluster cluster : clusters) {
-            System.out.println("🔍 集群: " + cluster.name);
+        for (String projectId : projectIds) {
+            System.out.println("============== Project: " + projectId + " ==============");
             try {
-                List<String> ns = fetchNamespaces(cluster.endpoint, cluster.caBase64, token);
-                ns.forEach(n -> System.out.println("  - " + n));
+                List<ClusterInfo> clusters = getClusters(projectId);
+                for (ClusterInfo cluster : clusters) {
+                    System.out.println("-- Cluster: " + cluster.name + " (" + cluster.location + ")");
+
+                    // 设置 kubectl 凭据
+                    Process credProcess = new ProcessBuilder(
+                            "gcloud", "container", "clusters", "get-credentials",
+                            cluster.name,
+                            "--region", cluster.location,
+                            "--project", projectId
+                    ).start();
+                    credProcess.waitFor();
+
+                    // 获取 namespace
+                    Process nsProcess = new ProcessBuilder(
+                            "kubectl", "get", "namespaces",
+                            "-o", "jsonpath={.items[*].metadata.name}"
+                    ).start();
+                    BufferedReader nsReader = new BufferedReader(new InputStreamReader(nsProcess.getInputStream()));
+                    String nsLine = nsReader.readLine();
+                    System.out.println("Namespaces: " + nsLine);
+                    nsProcess.waitFor();
+                }
             } catch (Exception e) {
-                System.err.println("⚠️  无法访问 " + cluster.name + ": " + e.getMessage());
+                System.err.println("Error processing project " + projectId + ": " + e.getMessage());
             }
         }
     }
 
-    public static String getAccessToken(String saKeyPath) throws IOException {
-        GoogleCredentials credentials = ServiceAccountCredentials.fromStream(new FileInputStream(saKeyPath))
-                .createScoped("https://www.googleapis.com/auth/cloud-platform");
-        credentials.refreshIfExpired();
-        return credentials.getAccessToken().getTokenValue();
+    static List<ClusterInfo> getClusters(String projectId) throws Exception {
+        List<ClusterInfo> clusters = new ArrayList<>();
+        Process process = new ProcessBuilder(
+                "gcloud", "container", "clusters", "list",
+                "--project", projectId,
+                "--format=value(name,location)"
+        ).start();
+
+        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String[] parts = line.trim().split("\\s+");
+            if (parts.length == 2) {
+                clusters.add(new ClusterInfo(parts[0], parts[1]));
+            }
+        }
+        process.waitFor();
+        return clusters;
     }
 
-    public static List<String> fetchNamespaces(String endpoint, String caBase64, String token) throws Exception {
-        // 构建信任上下文（基于集群自己的 CA）
-        SSLContext sslContext = createSSLContext(caBase64);
-        HttpTransport transport = new NetHttpTransport.Builder()
-                .doNotValidateCertificate()  // 可选：你若配置 SSLContext，CA 验证也行
-                .trustCertificatesFromJavaKeystore(null) // 用我们自己的
-                .setSslSocketFactory(sslContext.getSocketFactory())
-                .build();
+    static class ClusterInfo {
+        String name;
+        String location;
 
-        GenericUrl url = new GenericUrl(endpoint + "/api/v1/namespaces");
-        HttpRequestFactory requestFactory = transport.createRequestFactory(
-                request -> request.getHeaders().setAuthorization("Bearer " + token));
-
-        HttpRequest request = requestFactory.buildGetRequest(url);
-        HttpResponse response = request.execute();
-        String responseBody = response.parseAsString();
-
-        // 提取 namespace 名称
-        ObjectMapper mapper = new ObjectMapper();
-        JsonNode root = mapper.readTree(responseBody);
-        List<String> namespaces = new ArrayList<>();
-        for (JsonNode item : root.path("items")) {
-            namespaces.add(item.path("metadata").path("name").asText());
+        ClusterInfo(String name, String location) {
+            this.name = name;
+            this.location = location;
         }
-        return namespaces;
-    }
-
-    public static SSLContext createSSLContext(String caBase64) throws Exception {
-        byte[] decoded = Base64.getDecoder().decode(caBase64);
-        CertificateFactory cf = CertificateFactory.getInstance("X.509");
-        Certificate caCert;
-        try (InputStream in = new ByteArrayInputStream(decoded)) {
-            caCert = cf.generateCertificate(in);
-        }
-
-        KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
-        ks.load(null, null);
-        ks.setCertificateEntry("ca", caCert);
-
-        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-        tmf.init(ks);
-
-        SSLContext ctx = SSLContext.getInstance("TLS");
-        ctx.init(null, tmf.getTrustManagers(), new SecureRandom());
-        return ctx;
     }
 }
