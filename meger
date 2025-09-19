@@ -1,72 +1,62 @@
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.retry.RetryCallback;
+import org.springframework.retry.RetryContext;
+import org.springframework.retry.RetryListener;
+import org.springframework.retry.backoff.FixedBackOffPolicy;
+import org.springframework.retry.policy.SimpleRetryPolicy;
+import org.springframework.retry.support.RetryTemplate;
 
-public class GKEProjectNamespaceFetcher {
+@Configuration
+public class RetryConfig {
 
-    public static void main(String[] args) {
-        // 你可以根据需要添加多个项目 ID
-        List<String> projectIds = Arrays.asList("project-1-id", "project-2-id");
+    private static final Logger log = LoggerFactory.getLogger(RetryConfig.class);
 
-        for (String projectId : projectIds) {
-            System.out.println("============== Project: " + projectId + " ==============");
-            try {
-                List<ClusterInfo> clusters = getClusters(projectId);
-                for (ClusterInfo cluster : clusters) {
-                    System.out.println("-- Cluster: " + cluster.name + " (" + cluster.location + ")");
+    private final RetryProperties retryProperties;
 
-                    // 设置 kubectl 凭据
-                    Process credProcess = new ProcessBuilder(
-                            "gcloud", "container", "clusters", "get-credentials",
-                            cluster.name,
-                            "--region", cluster.location,
-                            "--project", projectId
-                    ).start();
-                    credProcess.waitFor();
+    public RetryConfig(RetryProperties retryProperties) {
+        this.retryProperties = retryProperties;
+    }
 
-                    // 获取 namespace
-                    Process nsProcess = new ProcessBuilder(
-                            "kubectl", "get", "namespaces",
-                            "-o", "jsonpath={.items[*].metadata.name}"
-                    ).start();
-                    BufferedReader nsReader = new BufferedReader(new InputStreamReader(nsProcess.getInputStream()));
-                    String nsLine = nsReader.readLine();
-                    System.out.println("Namespaces: " + nsLine);
-                    nsProcess.waitFor();
+    @Bean
+    public RetryTemplate retryTemplate() {
+        RetryTemplate template = new RetryTemplate();
+
+        // 使用配置文件中的值
+        SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(retryProperties.getMaxAttempts());
+        FixedBackOffPolicy backOffPolicy = new FixedBackOffPolicy();
+        backOffPolicy.setBackOffPeriod(retryProperties.getBackoff());
+
+        template.setRetryPolicy(retryPolicy);
+        template.setBackOffPolicy(backOffPolicy);
+
+        // 日志监听器
+        template.registerListener(new RetryListener() {
+            @Override
+            public <T, E extends Throwable> boolean open(RetryContext context,
+                                                         RetryCallback<T, E> callback) {
+                return true;
+            }
+
+            @Override
+            public <T, E extends Throwable> void close(RetryContext context,
+                                                       RetryCallback<T, E> callback,
+                                                       Throwable throwable) {
+                if (throwable != null) {
+                    log.error("任务在 {} 次尝试后仍然失败", context.getRetryCount() + 1, throwable);
                 }
-            } catch (Exception e) {
-                System.err.println("Error processing project " + projectId + ": " + e.getMessage());
             }
-        }
-    }
 
-    static List<ClusterInfo> getClusters(String projectId) throws Exception {
-        List<ClusterInfo> clusters = new ArrayList<>();
-        Process process = new ProcessBuilder(
-                "gcloud", "container", "clusters", "list",
-                "--project", projectId,
-                "--format=value(name,location)"
-        ).start();
-
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-        String line;
-        while ((line = reader.readLine()) != null) {
-            String[] parts = line.trim().split("\\s+");
-            if (parts.length == 2) {
-                clusters.add(new ClusterInfo(parts[0], parts[1]));
+            @Override
+            public <T, E extends Throwable> void onError(RetryContext context,
+                                                         RetryCallback<T, E> callback,
+                                                         Throwable throwable) {
+                log.warn("第 {} 次尝试失败: {}", context.getRetryCount(), throwable.getMessage());
             }
-        }
-        process.waitFor();
-        return clusters;
-    }
+        });
 
-    static class ClusterInfo {
-        String name;
-        String location;
-
-        ClusterInfo(String name, String location) {
-            this.name = name;
-            this.location = location;
-        }
+        return template;
     }
 }
