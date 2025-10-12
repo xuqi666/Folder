@@ -1,11 +1,27 @@
-   web-stat-filter:
-        enabled: true
-        url-pattern: /*
-        exclusions: "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*"
+import com.alibaba.druid.support.http.StatViewServlet;
+import com.alibaba.druid.support.http.WebStatFilter;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.boot.web.servlet.ServletRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
-      # 慢 SQL 配置
-      filters: stat,wall
-      stat:
-        slow-sql-millis: 2000   # 超过 2 秒算慢 SQL
-        log-slow-sql: true
-        merge-sql: true
+@Configuration
+public class DruidConfig {
+
+    @Bean
+    public ServletRegistrationBean<StatViewServlet> druidStatViewServlet() {
+        ServletRegistrationBean<StatViewServlet> bean = new ServletRegistrationBean<>(new StatViewServlet(), "/druid/*");
+        bean.addInitParameter("loginUsername", "admin");
+        bean.addInitParameter("loginPassword", "admin");
+        bean.addInitParameter("resetEnable", "false");
+        return bean;
+    }
+
+    @Bean
+    public FilterRegistrationBean<WebStatFilter> druidWebStatFilter() {
+        FilterRegistrationBean<WebStatFilter> bean = new FilterRegistrationBean<>(new WebStatFilter());
+        bean.addUrlPatterns("/*");
+        bean.addInitParameter("exclusions", "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*");
+        return bean;
+    }
+}
