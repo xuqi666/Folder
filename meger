@@ -1,62 +1,11 @@
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.retry.RetryCallback;
-import org.springframework.retry.RetryContext;
-import org.springframework.retry.RetryListener;
-import org.springframework.retry.backoff.FixedBackOffPolicy;
-import org.springframework.retry.policy.SimpleRetryPolicy;
-import org.springframework.retry.support.RetryTemplate;
+   web-stat-filter:
+        enabled: true
+        url-pattern: /*
+        exclusions: "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*"
 
-@Configuration
-public class RetryConfig {
-
-    private static final Logger log = LoggerFactory.getLogger(RetryConfig.class);
-
-    private final RetryProperties retryProperties;
-
-    public RetryConfig(RetryProperties retryProperties) {
-        this.retryProperties = retryProperties;
-    }
-
-    @Bean
-    public RetryTemplate retryTemplate() {
-        RetryTemplate template = new RetryTemplate();
-
-        // 使用配置文件中的值
-        SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy(retryProperties.getMaxAttempts());
-        FixedBackOffPolicy backOffPolicy = new FixedBackOffPolicy();
-        backOffPolicy.setBackOffPeriod(retryProperties.getBackoff());
-
-        template.setRetryPolicy(retryPolicy);
-        template.setBackOffPolicy(backOffPolicy);
-
-        // 日志监听器
-        template.registerListener(new RetryListener() {
-            @Override
-            public <T, E extends Throwable> boolean open(RetryContext context,
-                                                         RetryCallback<T, E> callback) {
-                return true;
-            }
-
-            @Override
-            public <T, E extends Throwable> void close(RetryContext context,
-                                                       RetryCallback<T, E> callback,
-                                                       Throwable throwable) {
-                if (throwable != null) {
-                    log.error("任务在 {} 次尝试后仍然失败", context.getRetryCount() + 1, throwable);
-                }
-            }
-
-            @Override
-            public <T, E extends Throwable> void onError(RetryContext context,
-                                                         RetryCallback<T, E> callback,
-                                                         Throwable throwable) {
-                log.warn("第 {} 次尝试失败: {}", context.getRetryCount(), throwable.getMessage());
-            }
-        });
-
-        return template;
-    }
-}
+      # 慢 SQL 配置
+      filters: stat,wall
+      stat:
+        slow-sql-millis: 2000   # 超过 2 秒算慢 SQL
+        log-slow-sql: true
+        merge-sql: true
