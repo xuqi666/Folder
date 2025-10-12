@@ -1,5 +1,8 @@
+package com.example.config;
+
 import com.alibaba.druid.support.http.StatViewServlet;
 import com.alibaba.druid.support.http.WebStatFilter;
+import jakarta.servlet.Servlet;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -8,19 +11,26 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class DruidConfig {
 
+    /**
+     * 注册 Druid StatViewServlet
+     */
     @Bean
-    public ServletRegistrationBean<StatViewServlet> druidStatViewServlet() {
-        ServletRegistrationBean<StatViewServlet> bean = new ServletRegistrationBean<>(new StatViewServlet(), "/druid/*");
-        bean.addInitParameter("loginUsername", "admin");
-        bean.addInitParameter("loginPassword", "admin");
-        bean.addInitParameter("resetEnable", "false");
+    public ServletRegistrationBean<Servlet> druidStatViewServlet() {
+        ServletRegistrationBean<Servlet> bean = new ServletRegistrationBean<>(new StatViewServlet(), "/druid/*");
+        bean.addInitParameter("loginUsername", "admin"); // 登录用户名
+        bean.addInitParameter("loginPassword", "admin"); // 登录密码
+        bean.addInitParameter("resetEnable", "false");   // 禁用“Reset All”功能
         return bean;
     }
 
+    /**
+     * 注册 Druid WebStatFilter，用于监控 web-jdbc 关联统计
+     */
     @Bean
     public FilterRegistrationBean<WebStatFilter> druidWebStatFilter() {
         FilterRegistrationBean<WebStatFilter> bean = new FilterRegistrationBean<>(new WebStatFilter());
-        bean.addUrlPatterns("/*");
+        bean.addUrlPatterns("/*"); // 所有请求都过滤
+        // 排除静态资源和监控页面
         bean.addInitParameter("exclusions", "*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*");
         return bean;
     }
